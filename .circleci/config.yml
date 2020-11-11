@@ -1,93 +1,111 @@
 version: 2.1
-
 commands:
-  dependencies:
+  rollback_network_tier:
     steps:
-      - run: yum -y install tar less gzip #needed to attach_workspace
-
+      - run:
+          name: Rollback network infra
+          command: |
+            aws cloudformation delete-stack --stack-name $NETWORK_STACK_NAME
+            aws cloudformation wait stack-delete-complete --stack-name $NETWORK_STACK_NAME
+          when: on_fail
+  rollback_server_tier:
+    steps:
+      - run:
+          name: Rollback server infra
+          command: |
+            aws cloudformation delete-stack --stack-name $SERVER_STACK_NAME
+            aws cloudformation wait stack-delete-complete --stack-name $SERVER_STACK_NAME
+          when: on_fail
+  fail_switch:
+    steps:
+      - run:
+          name: Deployment failure switch
+          command: |
+            exit 1
 workflows:
-  blue_green_workflow:
+  deploy_workflow:
     jobs:
-      - create_and_deploy_front_end:
+      #network, server then config management
+      - deploy_network_tier:
           context: aws
-      - get_last_deployment_id:
-          context: aws
-          requires:
-            - create_and_deploy_front_end
-      - promote_to_production:
-          context: aws
-          requires: 
-            - get_last_deployment_id
-      - clean_up_old_front_end:
+      - deploy_server_tier:
           context: aws
           requires:
-            - promote_to_production
+            - deploy_network_tier
+      - deploy_ansible_control:
+          context: aws
+          requires:
+            - deploy_server_tier
+      - smoke_test:
+          context: aws
+          requires:
+            - deploy_ansible_control
 jobs:
-  create_and_deploy_front_end:
+  deploy_network_tier:
     docker:
       - image: amazon/aws-cli
     steps:
       - checkout
       - run:
-          name: "Deploy S3 Bucket and latest prod version"
-          command: |
-            cd /root/project
-            aws cloudformation deploy \
-            --template-file bucket.yml \
-            --stack-name "bluegreen-${CIRCLE_WORKFLOW_ID:0:7}" \
-            --parameter-overrides DynamicBucketName="bluegreen-${CIRCLE_WORKFLOW_ID:0:7}"
-      - run:
-          name: "Sync latest code to S3 bucket"
-          command: |
-            cd /root/project
-            ls -lah
-            aws s3 cp /root/project/index.html s3://"bluegreen-${CIRCLE_WORKFLOW_ID:0:7}"
-
-  get_last_deployment_id:
+          name: "Network Infra Deploy"
+          command:
+            aws cloudformation deploy --stack-name $NETWORK_STACK_NAME --template-file $NETWORK_STACK_TEMPLATE --parameter-overrides file://$NETWORK_STACK_PARAMS
+  deploy_server_tier:
     docker:
       - image: amazon/aws-cli
     steps:
       - checkout
-      - dependencies
       - run:
-          name: "Query for last deployment id"
+          name: "Server Infra Deploy"
+          command:
+            aws cloudformation deploy --stack-name $SERVER_STACK_NAME --template-file $SERVER_STACK_TEMPLATE --parameter-overrides file://$SERVER_STACK_PARAMS --capabilities CAPABILITY_IAM
+      - rollback_server_tier
+      - rollback_network_tier
+  deploy_ansible_control:
+    docker:
+      - image: cimg/python:3.9.0
+    steps:
+      - checkout
+      - add_ssh_keys:
+          fingerprints: ["9e:c4:ff:36:9e:ab:07:79:a5:24:20:fe:02:62:f8:2a"]
+      - run:
+          name: "Ansible control server install and playbook run"
           command: |
-            cd /root/project
-            aws cloudformation list-exports \
-            --query "Exports[?Name==\`PipelineID\`].Value" \
-            --no-paginate --output text >> last_deploy_id
+            cd /home/circleci/
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            sudo unzip awscliv2.zip
+            sudo bash ./aws/install
+            cd /home/circleci/project
+            echo [ec2] >> inventory
+            aws ec2 describe-instances --query 'Reservations[*].Instances[*].PublicIpAddress' --filters "Name=tag:Name,Values=watched-node" --output text >> inventory
+            python -m pip install --user ansible
+            ansible-playbook playbook.yml
       - persist_to_workspace:
-          root: /root/project
+          root: /home/circleci
           paths:
-            - last_deploy_id
-
-  promote_to_production:
+            - project
+      - rollback_server_tier
+      - rollback_network_tier
+  smoke_test:
     docker:
       - image: amazon/aws-cli
     steps:
-      - checkout
-      - dependencies
+      - run: yum -y install tar less gzip elinks #needed to attach_workspace
       - attach_workspace:
-          at: /root/project
+          at: /home/circleci
       - run:
-          name: "Production distro"
+          name: "Simple smoke test"
           command: |
-            cd /root/project
-            aws cloudformation deploy --template-file cloudfront.yml \
-            --stack-name production-distro \
-            --parameter-overrides PipelineID="${CIRCLE_WORKFLOW_ID}"
+            cd /home/circleci/project/
+            PROMETHEUS=$(sed -n '2p' inventory)
+            if [[ $(elinks -dump -no-references http://$PROMETHEUS:9090/targets | grep ec2_exporter | grep up) == *"2/2 up"* ]];
+            then
+              echo "Two of two up and reporting into prometheus"
+              exit 0
+            else
+              echo "Check prometheus setup"
+              exit 1
+            fi
 
-  clean_up_old_front_end:
-    docker:
-      - image: amazon/aws-cli
-    steps:
-      - dependencies
-      - checkout
-      - attach_workspace:
-          at: /root/project
-      - run:
-          name: "Production distro"
-          command: |
-            PreviousPipelineID=$(cat /root/project/last_deploy_id)
-            aws s3 rm "s3://${PreviousPipelineID}" --recursive
-            aws cloudformation delete-stack --stack-name "${PreviousPipelineID}"
+      #- rollback_server_tier
+      #- rollback_network_tier
