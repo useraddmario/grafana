@@ -71,6 +71,10 @@ Resources:
         FromPort: 9100
         ToPort: 9100
         CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp 
+        FromPort: 9093
+        ToPort: 9093
+        CidrIp: 0.0.0.0/0
       SecurityGroupEgress:
       - IpProtocol: tcp 
         FromPort: 0
@@ -148,6 +152,7 @@ Resources:
 
             systemctl daemon-reload
             systemctl enable --now prometheus
+            
 
             cat  << EOF >> /etc/prometheus/prometheus.yml
               - job_name: ec2_exporter
@@ -159,6 +164,23 @@ Resources:
                 ec2_sd_configs:
                   - region: us-west-2
                     port: 9100
+
+            EOF
+
+            sed 's/^rule_files:/&\n  - "rules.yml"/' /etc/prometheus/prometheus.yml
+            
+            cat << EOF >> /etc/prometheus/rules.yml
+              groups:
+                - name: AllInstances
+                  rules:
+                  - alert: Using too much memory
+                    expr: node_memory_MemFree_bytes < 1000000
+                    for: 1m
+                    annotations:
+                      title: 'Instance {{ $labels.instance }} is almost out of memory'
+                      description: '{{ $labels.instance }} of job {{ $labels.job }} is using too much memory'
+                    labels:
+                      severity: 'critical'
 
             EOF
 
