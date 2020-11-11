@@ -162,14 +162,10 @@ Resources:
                 ec2_sd_configs:
                   - region: us-west-2
                     port: 9100
-            alerting:
-              alertmanagers:
-              - static_configs:
-                - targets:
-                - localhost:9093
 
             EOF
-
+            
+            sed -i 's/# - alertmanager:9093/ - alertmanager:9093/' /etc/prometheus/prometheus.yml
             sed -i 's/^rule_files:/&\n  - "rules.yml"/' /etc/prometheus/prometheus.yml
             
             cat << EOF >> /etc/prometheus/rules.yml
