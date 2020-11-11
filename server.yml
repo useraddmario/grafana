@@ -150,8 +150,6 @@ Resources:
             
             EOF
 
-            systemctl daemon-reload
-            systemctl enable --now prometheus
             
 
             cat  << EOF >> /etc/prometheus/prometheus.yml
@@ -164,25 +162,91 @@ Resources:
                 ec2_sd_configs:
                   - region: us-west-2
                     port: 9100
+            alerting:
+              alertmanagers:
+              - static_configs:
+                - targets:
+                - localhost:9093
 
             EOF
 
-            sed 's/^rule_files:/&\n  - "rules.yml"/' /etc/prometheus/prometheus.yml
+            sed -i 's/^rule_files:/&\n  - "rules.yml"/' /etc/prometheus/prometheus.yml
             
             cat << EOF >> /etc/prometheus/rules.yml
               groups:
-                - name: AllInstances
-                  rules:
-                  - alert: Using too much memory
-                    expr: node_memory_MemFree_bytes < 1000000
-                    for: 1m
-                    annotations:
-                      title: 'Instance {{ $labels.instance }} is almost out of memory'
-                      description: '{{ $labels.instance }} of job {{ $labels.job }} is using too much memory'
-                    labels:
-                      severity: 'critical'
+              - name: Down
+                rules:
+                - alert: InstanceDown
+                  expr: up == 0
+                  for: 1m
+                  labels:
+                    severity: 'critical'
+                  annotations:
+                    summary: "Instance  is down"
+                    description: " of job  has been down for more than 3 minutes."
 
             EOF
+
+            systemctl daemon-reload
+            systemctl enable --now prometheus
+            
+            wget https://github.com/prometheus/alertmanager/releases/download/v0.21.0/alertmanager-0.21.0.linux-amd64.tar.gz
+            tar xvfz alertmanager-0.21.0.linux-amd64.tar.gz
+
+            cp alertmanager-0.21.0.linux-amd64/alertmanager /usr/local/bin
+            cp alertmanager-0.21.0.linux-amd64/amtool /usr/local/bin/
+            mkdir /var/lib/alertmanager
+
+            cat << EOF >> /etc/prometheus/alertmanager.yml
+            route:
+            group_by: [Alertname]
+            receiver: email-me
+
+            receivers:
+            - name: email-me
+              email_configs:
+              - to: useraddmario@gmail.com
+                from: marios.subscriptions@gmail.com
+                smarthost: smtp.gmail.com:587
+                auth_username: marios.subscriptions@gmail.com
+                auth_identity: marios.subscriptions@gmail.com
+                auth_password: Linux6332!
+
+            EOF
+
+            chown -R prometheus:prometheus /etc/prometheus
+            chown prometheus:prometheus /usr/local/bin/{alertmanager,amtool}
+
+
+
+            cat << EOF >> /etc/systemd/system/alertmanager.service
+            [Unit]
+            Description=Alert Manager
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            Type=simple
+            User=prometheus
+            Group=prometheus
+            ExecStart=/usr/local/bin/alertmanager \
+              --config.file=/etc/prometheus/alertmanager.yml \
+              --storage.path=/var/lib/alertmanager
+
+            Restart=always
+
+            [Install]       
+            WantedBy=multi-user.target
+
+            systemctl daemon-reload
+            systemctl enable alertmanager
+            systemctl start alertmanager
+
+            EOF
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable alertmanager
+            sudo systemctl start alertmanager
 
             systemctl restart prometheus
 
