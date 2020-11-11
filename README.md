@@ -1,1 +1,3 @@
 # grafana
+
+### automated install test
