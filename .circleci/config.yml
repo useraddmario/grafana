@@ -93,11 +93,11 @@ jobs:
     steps:
       - run: yum -y install tar less gzip elinks #needed to attach_workspace
       - attach_workspace:
-          at: /home/circleci
+          at: /root
       - run:
           name: "Simple smoke test"
           command: |
-            cd /home/circleci/project/
+            cd /root/project/
             PROMETHEUS=$(sed -n '2p' inventory)
             if [[ $(elinks -dump -no-references http://$PROMETHEUS:9090/targets | grep ec2_exporter | grep up) == *"2/2 up"* ]];
             then
