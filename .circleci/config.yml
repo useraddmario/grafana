@@ -78,6 +78,7 @@ jobs:
             cd /home/circleci/project
             echo [ec2] >> inventory
             aws ec2 describe-instances --query 'Reservations[*].Instances[*].PublicIpAddress' --filters "Name=tag:Name,Values=watched-node" --output text >> inventory
+            aws ec2 describe-instances --query 'Reservations[*].Instances[*].PublicIpAddress' --filters "Name=tag:Name,Values=prometheus-instance" --output text >> inventory
             python -m pip install --user ansible
             ansible-playbook playbook.yml
       - persist_to_workspace:

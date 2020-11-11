@@ -1,6 +1,6 @@
 ---
 - name: node_exporter install and config
-  hosts: server
+  hosts: ec2
   vars:
     node_exporter_version: "1.0.1"
   roles:
