@@ -195,8 +195,8 @@ Resources:
 
             cat << EOF >> /etc/prometheus/alertmanager.yml
             route:
-            group_by: [Alertname]
-            receiver: email-me
+              group_by: [Alertname]
+              receiver: email-me
 
             receivers:
             - name: email-me
