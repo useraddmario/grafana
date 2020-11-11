@@ -85,8 +85,8 @@ jobs:
           root: /home/circleci
           paths:
             - project
-      - rollback_server_tier
-      - rollback_network_tier
+      #- rollback_server_tier
+      #- rollback_network_tier
   smoke_test:
     docker:
       - image: amazon/aws-cli
