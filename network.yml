@@ -1,5 +1,5 @@
 Description: >
-    Mario Rodriguez - AWS CloudFormation Lifecycle Hooks Study
+    Mario Rodriguez - AWS, CircleCI and Ansible Study
     VPC, pub subnet, IG w/default route for pub SN
 
 Parameters:
