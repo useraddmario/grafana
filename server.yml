@@ -1,0 +1,253 @@
+Description: >
+    Mario Rodriguez - AWS portion of CircleCI and AWS pipeline
+
+Parameters:
+
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  
+  UbuntuImageId:
+    Description: Region specific Ubuntu 20 image
+    Type: String
+    Default: ami-06e54d05255faf8f6
+
+Resources:
+
+  DescribeEC2Role:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+  DescribeEC2RolePolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: "DescribeEC2RolePolicy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Action:
+              - ec2:Describe*
+            Resource: "*"
+      Roles:
+        -
+          Ref: "DescribeEC2Role"
+  DescribeEC2Profile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: "/"
+      Roles:
+        -
+          Ref: "DescribeEC2Role"
+
+
+  WebSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow ssh/http to webserver
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+      - IpProtocol: tcp 
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp 
+        FromPort: 9090
+        ToPort: 9090
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp 
+        FromPort: 9100
+        ToPort: 9100
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp 
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+        ImageId: 
+          Ref: UbuntuImageId
+        KeyName: that-one
+        SubnetId: 
+          Fn::ImportValue:
+            !Sub "${EnvironmentName}-PUB-SN"
+        InstanceType: t2.nano
+        IamInstanceProfile: !Ref DescribeEC2Profile
+        SecurityGroupIds:
+          - !GetAtt WebSecGroup.GroupId
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeType: gp2
+              VolumeSize: 10
+        Tags:
+          - Key: Name
+            Value: prometheus-instance
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            
+            wget https://github.com/prometheus/prometheus/releases/download/v2.19.0/prometheus-2.19.0.linux-amd64.tar.gz
+
+            tar xvfz prometheus-2.19.0.linux-amd64.tar.gz
+
+            useradd --no-create-home --shell /bin/false prometheus
+
+            mkdir /etc/prometheus
+            mkdir /var/lib/prometheus
+
+            chown prometheus:prometheus /etc/prometheus
+            chown prometheus:prometheus /var/lib/prometheus
+
+            cp prometheus-2.19.0.linux-amd64/{prometheus,promtool} /usr/local/bin/
+
+            chown prometheus:prometheus /usr/local/bin/{prometheus,promtool}
+
+            cp -r prometheus-2.19.0.linux-amd64/{consoles,console_libraries} /etc/prometheus/
+
+            cp prometheus-2.19.0.linux-amd64/prometheus.yml /etc/prometheus/
+
+            chown -R prometheus:prometheus /etc/prometheus
+            chown prometheus:prometheus /var/lib/prometheus
+
+            cat << EOF > /etc/systemd/system/prometheus.service
+            [Unit]
+            Description=Prometheus Time Series Collection and Processing Server
+            Wants=network-online.target
+            After=network-online.target
+            
+            [Service]
+            User=prometheus
+            Group=prometheus
+            Type=simple
+            ExecStart=/usr/local/bin/prometheus \
+            --config.file /etc/prometheus/prometheus.yml \
+            --storage.tsdb.path /var/lib/prometheus/ \
+            --web.console.templates=/etc/prometheus/consoles \
+            --web.console.libraries=/etc/prometheus/console_libraries
+            
+            [Install]
+            WantedBy=multi-user.target
+            
+            EOF
+
+            systemctl daemon-reload
+            systemctl enable --now prometheus
+
+            cat  << EOF >> /etc/prometheus/prometheus.yml
+              - job_name: ec2_exporter
+                relabel_configs:
+                  - source_labels: [__meta_ec2_tag_Name]
+                    target_label: instance
+                  - source_labels: [__meta_ec2_private_ip]
+                    target_label: ip
+                ec2_sd_configs:
+                  - region: us-west-2
+                    port: 9100
+
+            EOF
+
+            systemctl restart prometheus
+            
+            useradd -M -r -s /bin/false node_exporter
+            
+            wget https://github.com/prometheus/node_exporter/releases/download/v1.0.1/node_exporter-1.0.1.linux-amd64.tar.gz
+            tar xzf node_exporter-1.0.1.linux-amd64.tar.gz
+            
+            cp node_exporter-1.0.1.linux-amd64/node_exporter /usr/local/bin/node_exporter
+            chown node_exporter:node_exporter /usr/local/bin/node_exporter
+            
+            cat << EOF >> /etc/systemd/system/node_exporter.service
+            [Unit]
+            Description=Prometheus Node Exporter
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            User=node_exporter
+            Group=node_exporter
+            Type=simple
+            ExecStart=/usr/local/bin/node_exporter
+            
+            [Install]
+            WantedBy=multi-user.target
+            
+            EOF
+
+            systemctl daemon-reload
+            systemctl start node_exporter.service
+            systemctl enable node_exporter.service
+            
+            
+
+
+  EC2Instance2:
+    Type: AWS::EC2::Instance
+    Properties:
+        ImageId: 
+          Ref: UbuntuImageId
+        KeyName: that-one
+        SubnetId: 
+          Fn::ImportValue:
+            !Sub "${EnvironmentName}-PUB-SN"
+        InstanceType: t2.nano
+        SecurityGroupIds:
+          - !GetAtt WebSecGroup.GroupId
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeType: gp2
+              VolumeSize: 10
+        Tags:
+          - Key: Name
+            Value: watched-node
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            
+            useradd -M -r -s /bin/false node_exporter
+            
+            wget https://github.com/prometheus/node_exporter/releases/download/v1.0.1/node_exporter-1.0.1.linux-amd64.tar.gz
+            tar xzf node_exporter-1.0.1.linux-amd64.tar.gz
+            
+            cp node_exporter-1.0.1.linux-amd64/node_exporter /usr/local/bin/node_exporter
+            chown node_exporter:node_exporter /usr/local/bin/node_exporter
+            
+            cat << EOF >> /etc/systemd/system/node_exporter.service
+            [Unit]
+            Description=Prometheus Node Exporter
+            Wants=network-online.target
+            After=network-online.target
+
+            [Service]
+            User=node_exporter
+            Group=node_exporter
+            Type=simple
+            ExecStart=/usr/local/bin/node_exporter
+            
+            [Install]
+            WantedBy=multi-user.target
+            
+            EOF
+
+            systemctl daemon-reload
+            systemctl start node_exporter.service
+            systemctl enable node_exporter.service
+            
+            

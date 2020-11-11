@@ -1,0 +1,93 @@
+version: 2.1
+
+commands:
+  dependencies:
+    steps:
+      - run: yum -y install tar less gzip #needed to attach_workspace
+
+workflows:
+  blue_green_workflow:
+    jobs:
+      - create_and_deploy_front_end:
+          context: aws
+      - get_last_deployment_id:
+          context: aws
+          requires:
+            - create_and_deploy_front_end
+      - promote_to_production:
+          context: aws
+          requires: 
+            - get_last_deployment_id
+      - clean_up_old_front_end:
+          context: aws
+          requires:
+            - promote_to_production
+jobs:
+  create_and_deploy_front_end:
+    docker:
+      - image: amazon/aws-cli
+    steps:
+      - checkout
+      - run:
+          name: "Deploy S3 Bucket and latest prod version"
+          command: |
+            cd /root/project
+            aws cloudformation deploy \
+            --template-file bucket.yml \
+            --stack-name "bluegreen-${CIRCLE_WORKFLOW_ID:0:7}" \
+            --parameter-overrides DynamicBucketName="bluegreen-${CIRCLE_WORKFLOW_ID:0:7}"
+      - run:
+          name: "Sync latest code to S3 bucket"
+          command: |
+            cd /root/project
+            ls -lah
+            aws s3 cp /root/project/index.html s3://"bluegreen-${CIRCLE_WORKFLOW_ID:0:7}"
+
+  get_last_deployment_id:
+    docker:
+      - image: amazon/aws-cli
+    steps:
+      - checkout
+      - dependencies
+      - run:
+          name: "Query for last deployment id"
+          command: |
+            cd /root/project
+            aws cloudformation list-exports \
+            --query "Exports[?Name==\`PipelineID\`].Value" \
+            --no-paginate --output text >> last_deploy_id
+      - persist_to_workspace:
+          root: /root/project
+          paths:
+            - last_deploy_id
+
+  promote_to_production:
+    docker:
+      - image: amazon/aws-cli
+    steps:
+      - checkout
+      - dependencies
+      - attach_workspace:
+          at: /root/project
+      - run:
+          name: "Production distro"
+          command: |
+            cd /root/project
+            aws cloudformation deploy --template-file cloudfront.yml \
+            --stack-name production-distro \
+            --parameter-overrides PipelineID="${CIRCLE_WORKFLOW_ID}"
+
+  clean_up_old_front_end:
+    docker:
+      - image: amazon/aws-cli
+    steps:
+      - dependencies
+      - checkout
+      - attach_workspace:
+          at: /root/project
+      - run:
+          name: "Production distro"
+          command: |
+            PreviousPipelineID=$(cat /root/project/last_deploy_id)
+            aws s3 rm "s3://${PreviousPipelineID}" --recursive
+            aws cloudformation delete-stack --stack-name "${PreviousPipelineID}"

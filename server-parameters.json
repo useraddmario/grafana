@@ -1,0 +1,10 @@
+[
+	{
+		"ParameterKey": "EnvironmentName",
+		"ParameterValue": "AWSLearn"
+	},
+    {
+		"ParameterKey": "UbuntuImageId",
+		"ParameterValue": "ami-06e54d05255faf8f6"
+    }
+]

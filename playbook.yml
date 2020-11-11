@@ -1,0 +1,8 @@
+---
+- name: node_exporter install and config
+  hosts: server
+  vars:
+    node_exporter_version: "1.0.1"
+  roles:
+   - node_exporter
+

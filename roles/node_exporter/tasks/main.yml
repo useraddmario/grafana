@@ -1,0 +1,43 @@
+---
+  - name: Download node_exporter
+    get_url:
+      url: https://github.com/prometheus/node_exporter/releases/download/v"{{ node_exporter_version }}"/node_exporter-"{{ node_exporter_version }}".linux-amd64.tar.gz
+      dest: /node_exporter-"{{ node_exporter_version }}".linux-amd64.tar.gz
+      mode: '0664'
+ 
+  - name: Extract node_exporter into /
+    unarchive:
+      remote_src: yes
+      src: /node_exporter-"{{ node_exporter_version }}".linux-amd64.tar.gz
+      dest: /
+
+  - name: Add node_exporter service account
+    user:
+      name: node_exporter
+      comment: Monitoring exporter service account
+      create_home: no
+      shell: /bin/false
+
+  - name: copy executables to proper location
+    copy: 
+      remote_src: yes
+      src: /node_exporter-"{{ node_exporter_version }}".linux-amd64/node_exporter
+      dest: /usr/local/bin/node_exporter
+      owner: node_exporter
+      group: node_exporter
+      mode: '0744'
+
+  - name: create a systemd node_exporter entry
+    copy:
+      src: roles/node_exporter/files/node_exporter.service
+      dest: /etc/systemd/system/node_exporter.service
+      owner: root
+      owner: root
+      mode: '0644'
+
+  - name: enable node_exporter
+    service: 
+      name: node_exporter
+      state: started
+      daemon_reload: yes
+      enabled: yes
